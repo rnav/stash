@@ -1,0 +1,45 @@
+#!/bin/bash
+
+[ "${FLOCKER}" != "$0" ] && exec env FLOCKER="$0" flock -ew 300 "$0" "$0" "$@" || :
+
+if [ -z "$1" -o ! -d "$1" -o -z "$2" -o ! -d "$2" ]; then
+	echo "Usage: $0 <path_to_git_repo> <path_to_output_maildir>"
+	exit
+fi
+
+set -e
+
+# No, we don't output to a strict 'maildir' format
+OUTPUT_MAILDIR=$(realpath -e $2)
+cd $1
+git fetch
+
+if [ ! -e maildir.status ]; then
+	FILENUM=0
+	CUR_HEAD=$(git rev-parse --verify "HEAD^{commit}")
+	git rev-list --all --objects --reverse -- m | grep -e " m$" | cut -d' ' -f1 | while read f; do FILENUM=$((FILENUM + 1)); git cat-file blob $f > $OUTPUT_MAILDIR/$FILENUM; done
+	NEW_FILENUM=$(git rev-list --all --objects --reverse -- m | grep -e " m$" | cut -d' ' -f1 | wc -l)
+	if [ $NEW_FILENUM -eq 0 -o $NEW_FILENUM -lt $FILENUM ]; then
+		echo "Error updating file number, please fix maildir.status manually"
+		exit
+	fi
+	echo "$CUR_HEAD $NEW_FILENUM" > maildir.status
+	exit
+fi
+
+CUR_HEAD=$(git rev-parse --verify "HEAD^{commit}")
+OLD_HEAD=$(cat maildir.status | cut -d' ' -f1)
+FILENUM=$(cat maildir.status | cut -d' ' -f2)
+
+if [ "$CUR_HEAD" == "$OLD_HEAD" ]; then
+	echo No new messages
+	exit
+fi;
+
+git rev-list --objects --reverse $OLD_HEAD..$CUR_HEAD -- m | grep -e " m$" | cut -d' ' -f1 | while read f; do FILENUM=$((FILENUM + 1)); git cat-file blob $f > $OUTPUT_MAILDIR/$FILENUM; done
+let "NEW_FILENUM = $FILENUM + $(git rev-list --objects --reverse $OLD_HEAD..$CUR_HEAD -- m | grep -e " m$" | cut -d' ' -f1 | wc -l)"
+if [ $NEW_FILENUM -eq 0 -o $NEW_FILENUM -lt $FILENUM ]; then
+	echo "Error updating file number, please fix maildir.status manually"
+	exit
+fi
+echo "$CUR_HEAD $NEW_FILENUM" > maildir.status
